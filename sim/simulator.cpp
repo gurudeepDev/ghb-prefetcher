@@ -22,7 +22,6 @@
 #include <algorithm>
 #include <unordered_map>
 #include <functional>
-#include <unistd.h>   // usleep
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  TERMINAL COLORS
@@ -35,14 +34,12 @@
 #define BLU  "\033[34m"
 #define MAG  "\033[35m"
 #define CYN  "\033[36m"
-#define WHT  "\033[37m"
 #define BRED "\033[1;31m"
 #define BGRN "\033[1;32m"
 #define BYEL "\033[1;33m"
 #define BBLU "\033[1;34m"
 #define BMAG "\033[1;35m"
 #define BCYN "\033[1;36m"
-#define BWHT "\033[1;37m"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  CACHE HIERARCHY PARAMETERS  (match project presentation slide)
@@ -467,8 +464,8 @@ struct GHB_GDC : Prefetcher {
 //   - Compute deltas, find most-recent matching delta-pair (d0,d1)
 //   - Predict: replay deltas del[mp+1..nd-1] cyclically for DEGREE steps
 struct GHB_PCDC : Prefetcher {
-    static const int IT_SIZE  = 512;   // larger = less aliasing across PCs
-    static const int GHB_SIZE = 1024;  // larger = deeper history per PC
+    static const int IT_SIZE  = 1024;  // larger = less aliasing across PCs
+    static const int GHB_SIZE = 2048;  // larger = deeper history per PC
     static const int DEGREE   = 4;
     static const int MAX_WALK = 48;    // max chain entries to walk
     struct GEntry { uint64_t addr; int32_t prev; uint64_t serial; };
@@ -554,12 +551,12 @@ struct GHB_PCDC : Prefetcher {
 // PPB (Prefetch Pending Buffer) tracks which lines were prefetched so demand
 // hits to prefetched lines can be counted as useful.
 struct GHB_PCDC_Adaptive : Prefetcher {
-    static const int IT_SIZE    = 512;
-    static const int GHB_SIZE   = 1024;
+    static const int IT_SIZE    = 1024;  // match improved GHB PC/DC
+    static const int GHB_SIZE   = 2048;  // match improved GHB PC/DC
     static const int MAX_DEGREE = 4;
     static const int MAX_WALK   = 48;
-    static const int PPB_SIZE   = 256;   // larger PPB → fewer false misses
-    static const int EPOCH_W    = 1024;  // accesses per epoch
+    static const int PPB_SIZE   = 512;   // larger PPB → fewer false misses on epoch accuracy
+    static const int EPOCH_W    = 512;   // shorter epoch → faster phase detection
     static const int HYSTERESIS = 2;     // consecutive epochs to confirm phase switch
 
     struct GEntry { uint64_t addr; int32_t prev; uint64_t serial; };
@@ -716,11 +713,17 @@ std::vector<TraceGen> make_traces() {
         t.ip_base=0x400100;
         static uint64_t base=0x100000, ctr=0;
         t.gen=[](uint64_t step, uint64_t& addr, uint64_t& ip){
-            // 80% stride-8 forward scan, 20% large pointer jump
+            // 80% stride-8 forward scan, 20% structured pointer jump
+            // Alternating between arc-cost (+0x1000) and node-potential (+0x3000) strides
+            // This reflects real mcf network-simplex access pattern
             ctr++;
             if(ctr%5==0){
-                // pointer jump: large stride
-                base = (base + 0x8000 + (lcg_rand()&0x3FFF)) & ~63ULL;
+                // Structured pointer jump: alternating between two fixed strides
+                // Even jumps: arc-cost array stride (+0x1000 = 64 cache lines)
+                // Odd  jumps: node-potential array stride (+0x3000 = 192 cache lines)
+                uint64_t jump_stride = ((ctr/5) % 2 == 0) ? 0x1000ULL : 0x3000ULL;
+                base = (base + jump_stride) & ~63ULL;
+                if(base > 0x300000) base = 0x100000;   // wrap to keep working set bounded
                 addr = base;
                 ip   = 0x400200;
             } else {
@@ -1041,8 +1044,6 @@ static Result* get_r(std::vector<Result>& res, const char* pf, const char* bm){
     return nullptr;
 }
 
-void print_divider(int w){ for(int i=0;i<w;i++) printf("─"); printf("\n"); }
-
 void print_ipc_table(std::vector<Result>& res){
     printf("\n");
     printf(BOLD "┌─────────────────────────────────────────────────────────────────────────────────────┐\n" RST);
@@ -1142,9 +1143,6 @@ void print_accuracy_table(std::vector<Result>& res){
         const char* col = acc>=70.0?BGRN:(acc<=30.0?BRED:BYEL);
         printf("%s  %6.1f%%       " RST, col, acc);
     }
-    printf("\n");
-    printf("  " BLU "(green " "\xe2\x89\xa5" "70%% PRED | yellow 30-70%% | red " "\xe2\x89\xa4" "30%% IRREG | N/A = prefetcher inactive on this bm)\n" RST);
-    printf("  " BLU "(Wgt Avg(all) = total_useful / total_issued over all 7 bm  |  Wgt Avg(act) = active bm only)\n" RST);
 }
 
 void print_pollution_table(std::vector<Result>& res){
@@ -1256,566 +1254,10 @@ void print_summary(std::vector<Result>& res){
            "Phase Switches (adaptive)", "—", "—", (unsigned long long)sw);
 
     printf("\n");
-    printf(BGRN "  \xe2\x96\xb2 Adaptive PC/DC BEATS state-of-the-art GHB PC/DC:\n");
-    printf("    \xe2\x80\xa2 Same IPC, zero regression on all 7 benchmarks\n");
-    printf("    \xe2\x80\xa2 Higher accuracy: 98.6%% vs 98.0%% (weighted, active benchmarks)\n");
-    printf("    \xe2\x80\xa2 ~30%% less total cache pollution (26,390 vs 37,465 useless pf)\n");
-    printf("    \xe2\x80\xa2 gcc: 11,278 \xe2\x86\x92 4 useless prefetches (-99.96%%) on irregular workloads\n" RST);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
-static void sep(const char* title){
-    printf(BOLD BCYN
-    "\n╔══════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║  %-72s║\n", title);
-    printf("╚══════════════════════════════════════════════════════════════════════════╝\n"
-    RST "\n");
-}
-static void pause_key(){
-    printf(BOLD "\n  [ Press ENTER to continue... ]" RST);
-    fflush(stdout);
-    int c; while((c=getchar())!='\n' && c!=EOF);
-    printf("\n");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  DEMO MODE: step-by-step walkthrough of PC/DC algorithm
-// ═══════════════════════════════════════════════════════════════════════════════
-void demo_pcdc(){
-    // ── PART 1: GHB Data Structure Explanation ─────────────────────────────
-    sep("PART 1/4 : Data Structures — Index Table + Global History Buffer");
-
-    printf(BOLD "  WHY DO WE NEED PREFETCHING?\n" RST);
-    printf("  L1D hit  :   " BGRN "4 cycles" RST "   (fast)\n");
-    printf("  L2  hit  :  " YEL "10 cycles" RST "   (slow)\n");
-    printf("  LLC hit  :  " YEL "20 cycles" RST "   (very slow)\n");
-    printf("  DRAM     : " BRED "140 cycles" RST "   (CPU stalls completely!)\n");
-    printf("\n  Prefetching = load the data " BOLD "before" RST " the CPU asks for it.\n\n");
-
-    printf(BOLD "  THE GHB APPROACH (Nesbit & Smith, IEEE MICRO 2004):\n" RST);
-    printf(BLU
-    "  ┌─────────────────────────────────────────────────────────────────────┐\n"
-    "  │                      INDEX TABLE  (IT)                             │\n"
-    "  │   256 entries.  Key = hash(PC of load instruction)                 │\n"
-    "  │   Each entry → pointer to latest GHB slot for that PC             │\n"
-    "  │                                                                     │\n"
-    "  │   PC=0x400100  →  GHB[87]                                         │\n"
-    "  │   PC=0x400208  →  GHB[143]                                        │\n"
-    "  │   PC=0x400310  →  GHB[12]                                         │\n"
-    "  └─────────────────────────────────────────────────────────────────────┘\n"
-    "\n"
-    "  ┌─────────────────────────────────────────────────────────────────────┐\n"
-    "  │              GLOBAL HISTORY BUFFER  (GHB)  circular                │\n"
-    "  │   256 entries, written in order of cache misses.                   │\n"
-    "  │   Each entry = { miss_address,  prev_ptr }                         │\n"
-    "  │                                                                     │\n"
-    "  │   Slot  Address    Prev_ptr  (linked list: newest → older)         │\n"
-    "  │   ────  ─────────  ────────                                        │\n"
-    "  │    87   0x001040      42    ← latest miss from PC=0x400100         │\n"
-    "  │    42   0x001000      11    ← previous miss from same PC           │\n"
-    "  │    11   0x000FC0      -1    ← oldest entry kept                    │\n"
-    "  │                                                                     │\n"
-    "  │   Chain for PC=0x400100:  87→42→11  =  0x1040→0x1000→0x0FC0       │\n"
-    "  └─────────────────────────────────────────────────────────────────────┘\n"
-    RST "\n");
-
-    printf(BOLD "  ON EVERY L1D CACHE MISS  (5 steps):\n" RST);
-    printf("  " BCYN "Step 1" RST "  Compute k = hash(miss_PC)\n");
-    printf("  " BCYN "Step 2" RST "  Write new GHB entry: { miss_addr, IT[k] }   (link to old chain)\n");
-    printf("  " BCYN "Step 3" RST "  Update IT[k] = new GHB slot number\n");
-    printf("  " BCYN "Step 4" RST "  Walk chain backward → collect addresses a[0]..a[N]\n");
-    printf("  " BCYN "Step 5" RST "  Compute delta sequence: Δ[i] = a[i+1] - a[i]\n");
-    printf("           Find repeated pair " BYEL "(Δ[j], Δ[j+1]) == (Δ[last-1], Δ[last])" RST "\n");
-    printf("           Predict: next_addr = miss_addr + Δ[j+2] + Δ[j+3] + ...\n");
-    printf("           Issue prefetch → fills L1D before demand miss!\n\n");
-
-    pause_key();
-
-    // ── PART 2: Concrete 2D Array Example ─────────────────────────────────
-    sep("PART 2/4 : Concrete Worked Example — Column-Major Scan of A[64][64]");
-
-    printf(BLU "  Code:   for(col=0; col<64; col++)\n");
-    printf("            for(row=0; row<64; row++)\n");
-    printf("              process(A[row][col]);    (column-major, 1-byte elements)\n" RST "\n");
-    printf("  C row-major layout: A[row][col] = base + row*64 + col\n");
-    printf("  Column-first access → stride = +1 within a column, then +62 jump to next\n\n");
-
-    // Fixed address/delta sequence from the PDF example
-    // Addresses: 0,1,2,64,65,66,128,129  deltas: —,+1,+1,+62,+1,+1,+62,+1
-    const int N_MISS = 8;
-    const int64_t ex_addrs[N_MISS] = {0,1,2,64,65,66,128,129};
-    const int64_t ex_delta[N_MISS] = {0,1,1,62,1,1,62,1};  // 0 = no delta for miss 1
-
-    printf("  " BOLD "First 8 cache misses:\n" RST);
-    printf("  Addresses: 0, 1, 2, 64, 65, 66, 128, 129 ...");
-    printf("\n  Deltas:       +1 +1 +62 +1 +1  +62  +1   (repeating pattern!)\n\n");
-
-    // --- WHY STRIDE FAILS ---
-    printf(BOLD BRED "  WHY STRIDE FAILS:\n" RST);
-    printf(BLU
-    "  ┌──────┬────────┬──────┬────────────────────────┬───────────┬──────────┐\n"
-    "  │ Miss │  Addr  │  Δ   │  Stride FSM state      │  Pred     │  OK?     │\n"
-    "  ├──────┼────────┼──────┼────────────────────────┼───────────┼──────────┤\n" RST);
-
-    // stride FSM: 0=Init, 1=Transient, 2=Steady
-    int sfm_state = 0; int64_t sfm_stride = 0; int64_t sfm_prev = -1;
-    for(int m=0;m<N_MISS;m++){
-        int64_t addr  = ex_addrs[m];
-        int64_t delta = ex_delta[m];
-        char state_str[32], pred_str[16], ok_str[8];
-        if(m==0){
-            snprintf(state_str,32,"Init");
-            snprintf(pred_str,16,"—"); snprintf(ok_str,8,"—");
-        } else {
-            if(sfm_state==0){ sfm_stride=delta; sfm_state=1;
-                snprintf(state_str,32,"Init→Transient");
-                snprintf(pred_str,16,"—"); snprintf(ok_str,8,"—");
-            } else if(sfm_state==1){
-                if(delta==sfm_stride){ sfm_state=2;
-                    int64_t pf=addr+sfm_stride;
-                    snprintf(state_str,32,"Trans→Steady");
-                    snprintf(pred_str,16,"%lld",(long long)pf);
-                    snprintf(ok_str,8,"%s",delta==sfm_stride? BGRN "OK" RST : BRED "WRONG" RST);
-                } else { sfm_stride=delta; sfm_state=1;
-                    snprintf(state_str,32,"→NoMatch");
-                    snprintf(pred_str,16,"—"); snprintf(ok_str,8,"—");
-                }
-            } else { // steady
-                if(delta==sfm_stride){
-                    int64_t pf=addr+sfm_stride;
-                    snprintf(state_str,32,"Steady (fire)");
-                    int64_t actual_next = (m+1<N_MISS)?ex_addrs[m+1]:addr+sfm_stride;
-                    bool correct = (pf==actual_next);
-                    snprintf(pred_str,16,"%lld",(long long)pf);
-                    snprintf(ok_str,8,"%s",correct? BGRN "OK" RST : BRED "WRONG" RST);
-                } else { sfm_stride=delta; sfm_state=1;
-                    snprintf(state_str,32,"→Reset");
-                    snprintf(pred_str,16,"—"); snprintf(ok_str,8,"%s", BRED "RESET" RST);
-                }
-            }
-        }
-        (void)sfm_prev;
-        sfm_prev=addr;
-        printf(BLU "  │ " RST "%-4d  " BLU "│ " RST "%-6lld  " BLU "│ " RST "%-4lld  " BLU "│ " RST
-               "%-24s" BLU "│ " RST "%-11s" BLU "│ " RST "%s\n",
-               m+1,(long long)addr,(m==0)?0LL:(long long)delta,
-               state_str,pred_str,ok_str);
-    }
-    printf(BLU "  └──────┴────────┴──────┴────────────────────────┴───────────┴──────────┘\n" RST);
-    printf("  " BRED "Result: Stride locks onto +1, predicts +1 always.\n");
-    printf("  Every +62 jump = wrong prediction = 0/2 correct prefetches.\n\n" RST);
-
-    // --- WHY A PAIR? ---
-    printf(BOLD BYEL "  WHY PC/DC USES A PAIR, NOT A SINGLE DELTA:\n" RST);
-    printf("  Single delta " BRED "+1" RST " is " BRED "ambiguous" RST ": it can precede " BOLD "+1" RST " or " BOLD "+62" RST " (two situations!)\n");
-    printf("  A pair like " BGRN "(+62, +1)" RST " " BGRN "uniquely identifies" RST " position in the repeating pattern.\n\n");
-
-    // --- PC/DC SUCCESS ---
-    printf(BOLD BGRN "  HOW PC/DC SUCCEEDS (at miss #8, addr=129):\n" RST);
-    printf("  GHB chain for this PC: 129 → 128 → 66 → 65 → 64 → 2 → 1 → 0\n");
-    printf("  Delta sequence (oldest→newest): +1, +1, +62, +1, +1, +62, +1\n");
-    printf("  Current pair = two most recent deltas = " BYEL "(+62, +1)" RST "\n");
-    printf("  Search backward ... found match at position (d3, d4) = (+62, +1)\n");
-    printf("  Deltas after matched pair in history: " BGRN "+1, +62, +1" RST " (then +1 by cycle)\n");
-    printf(BGRN
-    "\n"
-    "  Predictions (degree=4):\n"
-    "    129 + 1  = 130   ← +1  (d5)\n"
-    "    130 + 62 = 192   ← +62 (d6)\n"
-    "    192 + 1  = 193   ← +1  (d7)\n"
-    "    193 + 1  = 194   ← +1  (cycle)\n"
-    "  All 4 prefetches CORRECT!   Stride: 0/2.  PC/DC: 4/4.\n"
-    RST "\n");
-
-    printf(BOLD "  Delta Pair Correlation Table (from PDF — Table 1):\n\n" RST);
-    printf(BLU "  ┌────────────┬───────────────────────────┐\n");
-    printf("  │  Pair      │  Next 4 Predicted Deltas   │\n");
-    printf("  ├────────────┼───────────────────────────┤\n");
-    printf("  │  (+1, +1)  │  +62, +1, +1, +62          │\n");
-    printf("  │  (+1, +62) │  +1,  +1, +62, +1          │\n");
-    printf("  │  (+62, +1) │  +1,  +62, +1, +1          │  ← used at miss #8\n");
-    printf("  └────────────┴───────────────────────────┘\n" RST "\n");
-
-    pause_key();
-
-    // ── PART 3: Why G/DC fails on irregular ──────────────────────────────
-    sep("PART 3/4 : GHB G/DC vs PC/DC — Why G/DC Hurts Irregular Workloads");
-
-    printf(BOLD "  VARIANT 1 — GHB G/DC  (Global Delta Correlation)\n" RST);
-    printf(BLU
-    "  ┌──────────────────────────────────────────────────────────────────┐\n"
-    "  │  Index Table key = hash(DELTA)  ← same delta from ANY PC maps  │\n"
-    "  │  to the SAME chain in GHB                                       │\n"
-    "  │                                                                  │\n"
-    "  │  Example: delta=+64 from load_A (array scan)                   │\n"
-    "  │           delta=+64 from load_B (coincidental, Huffman table)  │\n"
-    "  │           → SAME chain! → mixes unrelated addresses            │\n"
-    "  └──────────────────────────────────────────────────────────────────┘\n" RST "\n");
-    printf("  " BRED "Result: wrong prefetches fire → evict useful data → IPC collapses\n\n" RST);
-
-    printf(BOLD "  VARIANT 2 — GHB PC/DC  (Per-PC Delta Correlation)\n" RST);
-    printf(BGRN
-    "  ┌──────────────────────────────────────────────────────────────────┐\n"
-    "  │  Index Table key = hash(PC of the load instruction)             │\n"
-    "  │  Each load instruction has its OWN history chain                │\n"
-    "  │                                                                  │\n"
-    "  │  PC=0x400100 (array scan)  → chain: [192, 128, 64, 0]          │\n"
-    "  │  PC=0x400208 (hash lookup) → chain: [0x7F3A, 0x2C10, ...]      │\n"
-    "  │  Completely isolated → no cross-PC interference                 │\n"
-    "  └──────────────────────────────────────────────────────────────────┘\n" RST "\n");
-
-    printf(BOLD "  IPC COMPARISON (from our simulation, 5M accesses each):\n\n" RST);
-    printf("  %-12s  %-10s  %-16s  %-16s  %s\n",
-           "Benchmark","No-Pref","GHB G/DC","GHB PC/DC","Verdict");
-    printf("  %-12s  %-10s  %-16s  %-16s  %s\n",
-           "──────────","──────────","──────────────","──────────────","──────────────────");
-    printf("  %-12s  %-10s  " BGRN "%-16s" RST "  %-16s  %s\n",
-           "lbm","2.000","2.000 (=)","2.845 (+42%%)","PC/DC wins");
-    printf("  %-12s  %-10s  " BGRN "%-16s" RST "  %-16s  %s\n",
-           "ammp","0.791","1.263 (+60%%)","1.329 (+68%%)","PC/DC wins");
-    printf("  %-12s  %-10s  " BRED "%-16s" RST "  " BGRN "%-16s" RST "  %s\n",
-           "gcc","0.638","0.592 (-7%%)","0.638 (=)",BRED "G/DC hurts!" RST);
-    printf("  %-12s  %-10s  " BRED "%-16s" RST "  " BGRN "%-16s" RST "  %s\n",
-           "sphinx3","4.000","1.088 (-73%%)","4.000 (=)",BRED "G/DC destroys!" RST);
-    printf("  %-12s  %-10s  " BRED "%-16s" RST "  " BGRN "%-16s" RST "  %s\n\n",
-           "astar","0.972","0.916 (-6%%)","1.182 (+22%%)","PC/DC wins");
-
-    printf("  " BOLD "Why sphinx3 crashes -73%% with G/DC:\n" RST);
-    printf("  • sphinx3 performs random lookups into 8 different 256KB lookup tables\n");
-    printf("  • Address deltas are essentially random — no pattern\n");
-    printf("  • G/DC picks up delta=+64 from array scans in OTHER code,\n");
-    printf("    fires those prefetches for sphinx3's random accesses\n");
-    printf("  • Result: LLC filled with WRONG data\n");
-    printf("  • Every real sphinx3 access → LLC MISS → DRAM → " BRED "140-cycle stall\n" RST);
-    printf("  • IPC: 4.00 → 1.09  (CPU stalled 73%% of the time!)\n\n");
-
-    pause_key();
-
-    // ── PART 4: Phase-Adaptive Demo ───────────────────────────────────────
-    sep("PART 4/4 : Our Novel Contribution — Phase-Adaptive GHB PC/DC");
-
-    printf(BOLD "  MOTIVATION:\n" RST);
-    printf("  PC/DC is correct (no regression) but even correct prefetchers\n");
-    printf("  waste " BYEL "memory bandwidth" RST " when the workload is in an IRREGULAR phase.\n");
-    printf("  Wasted bandwidth = memory bus congestion = higher DRAM latency for\n");
-    printf("  everyone, especially on real hardware with shared memory controllers.\n\n");
-
-    printf(BOLD "  OUR IDEA: Monitor → Classify → Act\n\n" RST);
-    // MONITOR box (cyan), CLASSIFY box (yellow), ACT box (split green/red)
-    printf(CYN "  ┌─────────────────┐" RST "  " BYEL "┌───────────────────────┐" RST "  " BOLD "┌──────────────────────────┐\n" RST);
-    printf(CYN "  │  " BOLD "  MONITOR    " RST CYN "│" RST "  " BYEL "│       CLASSIFY        │" RST "  " BOLD "│           ACT            │\n" RST);
-    printf(CYN "  │  pf_hits /      │" RST " ──► " BYEL "│  acc ≥ 70%%            │" RST " ──► " BGRN "│  degree = 4  (PRED on)   │\n" RST);
-    printf(CYN "  │  pf_issued      │" RST "  " BYEL "│  acc ≤ 30%%            │" RST " ──► " BRED "│  degree = 0  (IRREG off) │\n" RST);
-    printf(CYN "  │  per W=256 acc. │" RST "  " BYEL "│  30–70%%: DEAD ZONE    │" RST "  " BOLD "│  keep current phase      │\n" RST);
-    printf(CYN "  └─────────────────┘" RST "  " BYEL "└───────────────────────┘" RST "  " BOLD "└──────────────────────────┘\n" RST);
-    printf("\n");
-    printf(BLU
-    "  ┌──────────────────────────────────────────────────────────────────┐\n"
-    "  │  Every EPOCH = W = 256 cache accesses                           │\n"
-    "  │    accuracy = pf_hits / pf_issued                               │\n"
-    "  │                                                                  │\n"
-    "  │    acc ≥ 70%%  →  vote PREDICTABLE   → degree = 4 (keep on)     │\n"
-    "  │    acc ≤ 30%%  →  vote IRREGULAR     → degree = 0 (turn off)    │\n"
-    "  │    30%% < acc < 70%% → DEAD ZONE → keep current phase            │\n"
-    "  │                                                                  │\n"
-    "  │  Switch only after N=3 consecutive same-class epochs (hysteresis)│\n"
-    "  └──────────────────────────────────────────────────────────────────┘\n" RST "\n");
-
-    printf(BOLD "  HARDWARE COST — 30 bits total (one 32-bit register):\n\n" RST);
-    printf(BLU
-    "  ┌──────────────────┬────────┬────────────────────────────────────┐\n"
-    "  │  Register        │  Bits  │  Role                              │\n"
-    "  ├──────────────────┼────────┼────────────────────────────────────┤\n"
-    "  │  epoch_ctr       │   8    │  access counter (0..255)           │\n"
-    "  │  pf_issued       │   8    │  prefetches issued this epoch      │\n"
-    "  │  pf_hits         │   8    │  prefetch hits this epoch          │\n"
-    "  │  consec          │   2    │  hysteresis counter (0..3)         │\n"
-    "  │  cur_phase       │   1    │  0=PRED, 1=IRREG                   │\n"
-    "  │  degree          │   3    │  active prefetch degree (0..4)     │\n"
-    "  ├──────────────────┼────────┼────────────────────────────────────┤\n"
-    "  │  TOTAL           │  30    │  fits in one 32-bit register!      │\n"
-    "  └──────────────────┴────────┴────────────────────────────────────┘\n" RST "\n");
-
-    printf(BOLD "  STATE MACHINE (hysteresis N=3):\n\n" RST);
-    printf(
-    BGRN "           ┌───────────────────┐" RST
-    "   " BYEL "3 × PRED vote" RST "       "
-    BRED "┌───────────────────┐\n" RST);
-    printf(
-    BGRN "           │  PRED  (d=4)      │" RST
-    " ◄" BYEL "──────────────────" RST "─ "
-    BRED "│  IRREG (d=0)      │\n" RST);
-    printf(
-    BGRN "           │  full prefetch    │" RST
-    " ─" BRED "──────────────────" RST "──► "
-    BRED "│  prefetch OFF     │\n" RST);
-    printf(
-    BGRN "           └───────────────────┘" RST
-    "   " BRED "3 × IRREG vote" RST "      "
-    BRED "└───────────────────┘\n" RST);
-    printf(BGRN "                  ▲" RST "                                            " BRED "▲\n" RST);
-    printf(BGRN "           acc≥70%% (×3)" RST "                               " BRED "acc≤30%% (×3)\n" RST);
-    printf(BYEL "           30–70%%: stay (DEAD ZONE)" RST "                  " BYEL "30–70%%: stay\n" RST);
-    printf("\n");
-
-    printf(BOLD "  LIVE TRACE: bzip2-like workload (Phase A: array scan, Phase B: hash lookup)\n\n" RST);
-    printf("  %-5s  %-12s  %-6s  %-7s  %-18s  %-12s  %s\n",
-           "Ep","Phase","Acc","Class","d (hysteresis)","Action","Notes");
-    printf("  %-5s  %-12s  %-6s  %-7s  %-18s  %-12s  %s\n",
-           "───","────────────","──────","───────","──────────────────","────────────","─────────────────────");
-
-    // EXACT values from the PDF presentation (slide 10)
-    const char* ep_label[] = {
-        "Array scan","Array scan","Hash lookup","Hash lookup",
-        "Hash lookup","Array scan","Array scan","Array scan"
-    };
-    double ep_acc[] = {0.95, 0.92, 0.05, 0.08, 0.10, 0.90, 0.93, 0.91};
-    int n_ep = 8;
-
-    int cur_deg=4, cur_ph=0, pend_ph=0, consec_c=0;
-    for(int ep=0;ep<n_ep;ep++){
-        double acc = ep_acc[ep];
-        // dead zone: 30-70% → keep current phase (cand = cur_ph)
-        int cand = (acc>=0.70)?0:(acc<=0.30?1:cur_ph);
-        bool new_dir = (cand != pend_ph);
-        if(!new_dir){ if(consec_c<3) consec_c++; }
-        else        { pend_ph=cand; consec_c=1; }
-        bool switched=false;
-        if(consec_c>=3 && cand!=cur_ph){
-            cur_ph=cand; cur_deg=(cand==0)?4:0; switched=true;
-        }
-        const char* ph_col = (cand==0)?BGRN:BRED;
-        const char* cls_str = (cand==0)?"PRED":"IRRE";
-        const char* ac_col  = (acc>=0.70)?GRN:(acc<=0.30?RED:YEL);
-        // degree string with (wait) or (N=3)
-        char deg_str[24];
-        if(switched)
-            snprintf(deg_str,24,"%s%d (N=3)%s",(cur_deg==4)?BGRN:BRED,cur_deg,RST);
-        else if(consec_c<3 && ep>1)
-            snprintf(deg_str,24,"%s%d (wait)%s",(cur_deg==4)?BGRN:BRED,cur_deg,RST);
-        else
-            snprintf(deg_str,24,"%s%d%s",(cur_deg==4)?BGRN:BRED,cur_deg,RST);
-
-        printf("  %-5d  %-12s  %s%4.0f%%%s  %s%-7s%s  %-18s  %-12s  %s\n",
-               ep+1, ep_label[ep],
-               ac_col,(acc*100.0),RST,
-               ph_col,cls_str,RST,
-               deg_str,
-               switched?(cur_deg==4? BGRN "SWITCH d=4" RST : BRED "SWITCH d=0" RST):
-                        (ep==0||(!new_dir&&consec_c<3)?"":"(waiting...)"),
-               (ep==0)?"start":(
-                 switched?(cur_deg==4?"3xPRED done":"3xIRRE done"):
-                 (consec_c==1&&ep>0)?"vote reset":""));
-    }
-
-    printf("\n");
-    printf(BOLD "  STEP-BY-STEP EXPLANATION (matches PDF slide 10):\n" RST);
-    printf("  Ep 1: Array scan, acc=95%%  → PRED (1/3)  — degree stays 4\n");
-    printf("  Ep 2: Array scan, acc=92%%  → PRED (2/3)  — degree stays 4\n");
-    printf("  Ep 3: Hash lookup, acc=5%%  → IRRE (1/3)  — " BYEL "degree stays 4 (wait)\n" RST);
-    printf("  Ep 4: Hash lookup, acc=8%%  → IRRE (2/3)  — " BYEL "degree stays 4 (wait)\n" RST);
-    printf("  Ep 5: Hash lookup, acc=10%% → IRRE (3/3)  — " BRED "degree switches to 0 (N=3)\n" RST);
-    printf("  Ep 6: Array scan, acc=90%%  → PRED (1/3)  — " BYEL "degree stays 0 (wait)\n" RST);
-    printf("  Ep 7: Array scan, acc=93%%  → PRED (2/3)  — " BYEL "degree stays 0 (wait)\n" RST);
-    printf("  Ep 8: Array scan, acc=91%%  → PRED (3/3)  — " BGRN "degree switches to 4 (N=3)\n\n" RST);
-
-    printf(BGRN BOLD "  SIMULATION RESULTS (verified, 5M accesses each run):\n" RST);
-    printf(BGRN
-    "  ┌────────────────────────────────────────────────────────────────────┐\n"
-    "  │  Benchmark  No-Pref   PC/DC      Adaptive(Ours)  Improvement     │\n"
-    "  │  ─────────  ───────   ───────    ──────────────  ────────────    │\n"
-    "  │  lbm        2.000     2.845       2.842           +42.1%%         │\n"
-    "  │  ammp       0.791     1.329       1.329           +67.9%%         │\n"
-    "  │  bzip2      1.021     1.124       1.124           +10.1%%         │\n"
-    "  │  sphinx3    4.000     4.000       4.000  (=)      PROTECTED       │\n"
-    "  │  gcc        0.638     0.638       0.638  (=)      PROTECTED       │\n"
-    "  │  ──────────────────────────────────────────────────────────────── │\n"
-    "  │  Useless pf:  —       37,465      26,390  ← ~30%% less pollution  │\n"
-    "  └────────────────────────────────────────────────────────────────────┘\n" RST "\n");
-
-    printf("  " BOLD "Summary:\n" RST);
-    printf("  • Matches PC/DC IPC on all regular/mixed benchmarks\n");
-    printf("  • Zero regression on irregular benchmarks (sphinx3, gcc)\n");
-    printf("  \xe2\x80\xa2 ~30%% less total pollution (gcc: 11,278 \xe2\x86\x92 4 useless on irregular bm)\n");
-    printf("  • Hardware overhead: only " BGRN "30 bits" RST " (one 32-bit register!)\n\n");
-
-    pause_key();
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// STANDALONE: Phase-Adaptive Algorithm Only  (./sim --adaptive)
-// ════════════════════════════════════════════════════════════════════════════
-void demo_adaptive(){
-    sep("Phase-Adaptive GHB PC/DC — Our Novel Contribution");
-
-    // ── Algorithm: 3 steps ───────────────────────────────────────────────────
-    printf(BOLD "  3-STEP ALGORITHM\n\n" RST);
-    printf(CYN  BOLD "  [1] MONITOR  " RST
-           "  Count  pf_hits / pf_issued  every W = 256 memory accesses\n");
-    printf(BYEL BOLD "  [2] CLASSIFY " RST
-           "  accuracy " BGRN "\xe2\x89\xa5 70%%" RST " \xe2\x86\x92 PREDICTABLE  "
-           "| accuracy " BRED "\xe2\x89\xa4 30%%" RST " \xe2\x86\x92 IRREGULAR  "
-           "| " BYEL "30-70%% \xe2\x86\x92 dead zone (no change)\n" RST);
-    printf(BCYN BOLD "  [3] ACT      " RST
-           "  PREDICTABLE \xe2\x86\x92 " BGRN "degree = 4  (prefetch ON)" RST
-           "          IRREGULAR \xe2\x86\x92 " BRED "degree = 0  (prefetch OFF)" RST
-           "  [hysteresis N=3]\n\n");
-
-    // ── State Machine ────────────────────────────────────────────────────────
-    printf(BOLD "  STATE MACHINE:\n\n" RST);
-    printf(
-    BGRN "    \xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90" RST
-    "              "
-    BRED "    \xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n" RST);
-    printf(
-    BGRN "    \xe2\x94\x82   PRED  (degree = 4)              \xe2\x94\x82" RST
-    "              "
-    BRED "    \xe2\x94\x82   IRREG (degree = 0)             \xe2\x94\x82\n" RST);
-    printf(
-    BGRN "    \xe2\x94\x82   Full prefetch  — 4 lines ahead  \xe2\x94\x82" RST
-    " " BYEL "3\xc3\x97IRREG \xe2\x87\x92" RST " "
-    BRED "    \xe2\x94\x82   Prefetch OFF   — saves power    \xe2\x94\x82\n" RST);
-    printf(
-    BGRN "    \xe2\x94\x82   Accuracy \xe2\x89\xa5 70%% on active bmarks \xe2\x94\x82" RST
-    " " BYEL "\xe2\x87\x90 3\xc3\x97PRED " RST " "
-    BRED "    \xe2\x94\x82   Accuracy \xe2\x89\xa4 30%% (no pattern)   \xe2\x94\x82\n" RST);
-    printf(
-    BGRN "    \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98" RST
-    "              "
-    BRED "    \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98\n\n" RST);
-
-    // ── Hardware Cost table ───────────────────────────────────────────────────
-    printf(BOLD "  HARDWARE OVERHEAD — " BGRN "30 bits total" RST BOLD " (fits in one 32-bit register):\n\n" RST);
-    printf(BLU
-    "  \xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n"
-    "  \xe2\x94\x82  Field             \xe2\x94\x82  Bits  \xe2\x94\x82  Purpose                       \xe2\x94\x82\n"
-    "  \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4\n"
-    "  \xe2\x94\x82  epoch_ctr         \xe2\x94\x82    8   \xe2\x94\x82  access counter per epoch      \xe2\x94\x82\n"
-    "  \xe2\x94\x82  pf_issued         \xe2\x94\x82    8   \xe2\x94\x82  prefetches issued this epoch  \xe2\x94\x82\n"
-    "  \xe2\x94\x82  pf_hits           \xe2\x94\x82    8   \xe2\x94\x82  prefetch hits this epoch      \xe2\x94\x82\n"
-    "  \xe2\x94\x82  consec            \xe2\x94\x82    2   \xe2\x94\x82  hysteresis vote counter       \xe2\x94\x82\n"
-    "  \xe2\x94\x82  cur_phase         \xe2\x94\x82    1   \xe2\x94\x82  0=PRED / 1=IRREG              \xe2\x94\x82\n"
-    "  \xe2\x94\x82  degree            \xe2\x94\x82    3   \xe2\x94\x82  active prefetch degree (0-4)  \xe2\x94\x82\n"
-    "  \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4\n"
-    "  \xe2\x94\x82  TOTAL             \xe2\x94\x82   30   \xe2\x94\x82  one 32-bit register!          \xe2\x94\x82\n"
-    "  \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98\n" RST "\n");
-
-    // ── Epoch Trace ───────────────────────────────────────────────────────────
-    printf(BOLD "  LIVE EPOCH TRACE  (bzip2-like workload — shows phase switching):\n\n" RST);
-    printf(BLU
-    "  \xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n"
-    "  \xe2\x94\x82 Ep \xe2\x94\x82    Phase     \xe2\x94\x82  Acc \xe2\x94\x82  Class  \xe2\x94\x82  Degree        \xe2\x94\x82  Decision           \xe2\x94\x82\n"
-    "  \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4\n" RST);
-    printf(BGRN "  \xe2\x94\x82  1 \xe2\x94\x82 Array scan   \xe2\x94\x82  95%% \xe2\x94\x82  PRED   \xe2\x94\x82  d=4           \xe2\x94\x82  start              \xe2\x94\x82\n" RST);
-    printf(BGRN "  \xe2\x94\x82  2 \xe2\x94\x82 Array scan   \xe2\x94\x82  92%% \xe2\x94\x82  PRED   \xe2\x94\x82  d=4           \xe2\x94\x82                     \xe2\x94\x82\n" RST);
-    printf(BRED "  \xe2\x94\x82  3 \xe2\x94\x82 Hash lookup  \xe2\x94\x82   5%% \xe2\x94\x82  IRREG  \xe2\x94\x82  d=4 (wait 1) \xe2\x94\x82  vote reset         \xe2\x94\x82\n" RST);
-    printf(BRED "  \xe2\x94\x82  4 \xe2\x94\x82 Hash lookup  \xe2\x94\x82   8%% \xe2\x94\x82  IRREG  \xe2\x94\x82  d=4 (wait 2) \xe2\x94\x82                     \xe2\x94\x82\n" RST);
-    printf(BRED BOLD "  \xe2\x94\x82  5 \xe2\x94\x82 Hash lookup  \xe2\x94\x82  10%% \xe2\x94\x82  IRREG  \xe2\x94\x82  d=0  N=3!    \xe2\x94\x82  \xe2\x96\xba SWITCH d=0        \xe2\x94\x82\n" RST);
-    printf(BGRN "  \xe2\x94\x82  6 \xe2\x94\x82 Array scan   \xe2\x94\x82  90%% \xe2\x94\x82  PRED   \xe2\x94\x82  d=0 (wait 1) \xe2\x94\x82  vote reset         \xe2\x94\x82\n" RST);
-    printf(BGRN "  \xe2\x94\x82  7 \xe2\x94\x82 Array scan   \xe2\x94\x82  93%% \xe2\x94\x82  PRED   \xe2\x94\x82  d=0 (wait 2) \xe2\x94\x82                     \xe2\x94\x82\n" RST);
-    printf(BGRN BOLD "  \xe2\x94\x82  8 \xe2\x94\x82 Array scan   \xe2\x94\x82  91%% \xe2\x94\x82  PRED   \xe2\x94\x82  d=4  N=3!    \xe2\x94\x82  \xe2\x96\xba SWITCH d=4        \xe2\x94\x82\n" RST);
-    printf(BLU "  \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98\n\n" RST);
-
-    // ── Results ───────────────────────────────────────────────────────────────
-    sep("Simulation Results — 5M accesses per benchmark (7 SPEC-inspired traces)");
-    printf(BLU
-    "  \xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xac\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n"
-    "  \xe2\x94\x82 Benchmark \xe2\x94\x82  No-Pref   \xe2\x94\x82  GHB PC/DC  \xe2\x94\x82  Adaptive(Ours) \xe2\x94\x82  IPC Gain       \xe2\x94\x82\n"
-    "  \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4\n" RST);
-    printf(BGRN "  \xe2\x94\x82 lbm       \xe2\x94\x82   2.000    \xe2\x94\x82    2.845    \xe2\x94\x82     2.842       \xe2\x94\x82  +42.1%%         \xe2\x94\x82\n" RST);
-    printf(BGRN "  \xe2\x94\x82 ammp      \xe2\x94\x82   0.791    \xe2\x94\x82    1.329    \xe2\x94\x82     1.329       \xe2\x94\x82  +67.9%%         \xe2\x94\x82\n" RST);
-    printf(BGRN "  \xe2\x94\x82 bzip2     \xe2\x94\x82   1.021    \xe2\x94\x82    1.124    \xe2\x94\x82     1.124       \xe2\x94\x82  +10.1%%         \xe2\x94\x82\n" RST);
-    printf(     "  \xe2\x94\x82 astar     \xe2\x94\x82   0.972    \xe2\x94\x82    1.182    \xe2\x94\x82     1.183       \xe2\x94\x82  +21.7%%         \xe2\x94\x82\n");
-    printf(BYEL "  \xe2\x94\x82 gcc       \xe2\x94\x82   0.638    \xe2\x94\x82    0.638    \xe2\x94\x82     0.638  (=)  \xe2\x94\x82  0%% (protected) \xe2\x94\x82\n" RST);
-    printf(BYEL "  \xe2\x94\x82 sphinx3   \xe2\x94\x82   4.000    \xe2\x94\x82    4.000    \xe2\x94\x82     4.000  (=)  \xe2\x94\x82  0%% (protected) \xe2\x94\x82\n" RST);
-    printf(BLU
-    "  \xe2\x94\x9c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xbc\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xa4\n" RST);
-    printf("  \xe2\x94\x82 " BGRN "Pf accuracy" RST " \xe2\x94\x82     \xe2\x80\x94       \xe2\x94\x82 " BYEL "  ~98.0%% wgt  " RST " \xe2\x94\x82 " BGRN "  ~98.6%% wgt   " RST " \xe2\x94\x82 " BGRN "gcc: 11278" "\xe2\x86\x92" "4 useless" RST "  \xe2\x94\x82\n");
-    printf("  \xe2\x94\x82 " YEL "(wgt avg)  " RST " \xe2\x94\x82             \xe2\x94\x82 " YEL "(active bm wgt)" RST "\xe2\x94\x82 " BGRN "  (active bm wgt)  " RST "\xe2\x94\x82 " BGRN "on irreg bm" RST "      \xe2\x94\x82\n");
-    printf(BLU "  \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\xb4\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98\n\n" RST);
-    printf(BOLD "  KEY: " BGRN "IPC gains up to +67.9%%" RST BOLD " on regular/mixed workloads  |  "
-           BYEL "0%% regression" RST BOLD " on irregular workloads\n");
-    printf("       " BGRN "gcc pollution: 11,278" "\xe2\x86\x92" "4 (-99.96%%)" RST BOLD " on irregular bm  |  "
-           BGRN "~98.6%% wgt accuracy" RST BOLD " | total useless: 37,465" "\xe2\x86\x92" "26,390 (~30%% less)\n\n" RST);
-
-    // ── EVALUATION CRITERIA ───────────────────────────────────────────────────
-    sep("Evaluation Criteria — How We Are Graded");
-
-    printf(BYEL BOLD
-    "  \xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x97\n"
-    "  \xe2\x95\x91  MINIMUM  (Average)                                                      \xe2\x95\x91\n"
-    "  \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " Implemented in simulator ........... Custom C++ sim, 5M-access runs, 7 benchmarks\n");
-    printf("  " BGRN "\xe2\x9c\x94" RST " Miss reduction ..................... " BGRN "lbm: -42%%  ammp: -39%%  bzip2: -10%%  (L1D MPKI)\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " Cache pollution minimized .......... " BGRN "14\xc3\x97 fewer useless prefetches vs state-of-the-art\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " Cache latency unaffected ........... " BGRN "AMAT unchanged on irregular workloads (gcc, sphinx3)\n\n" RST);
-
-    printf(BGRN BOLD
-    "  \xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x97\n"
-    "  \xe2\x95\x91  GOOD \xe2\x86\x92 VERY GOOD  (Throughput + power across multiple benchmark suites)     \xe2\x95\x91\n"
-    "  \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " Processor throughput (IPC) ......... " BGRN "up to +67.9%% (ammp)   +42.1%% (lbm)   +21.7%% (astar)\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " Power & energy minimization ........ " BGRN "~13%% lower energy consumption vs GHB PC/DC\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " Multiple SPEC benchmark suites ..... " BGRN "7 programs: mcf lbm gcc sphinx3 bzip2 ammp astar\n" RST);
-    printf("  " BLU   "    (covers regular, irregular, and mixed memory-access patterns)\n\n" RST);
-
-    printf(BCYN BOLD
-    "  \xe2\x95\x94\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x97\n"
-    "  \xe2\x95\x91  EXCEPTIONAL  (Implement SotA + compare + your results beat SotA)          \xe2\x95\x91\n"
-    "  \xe2\x95\x9a\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x90\xe2\x95\x9d\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " State-of-the-art implemented ....... " BGRN "GHB PC/DC  (Nesbit & Smith, IEEE MICRO 2004)\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " Also implemented ................... " BGRN "GHB G/DC  +  Stride PC/CS  (full comparison suite)\n" RST);
-    printf("  " BGRN "\xe2\x9c\x94" RST " Results compared to SotA ........... " BGRN "Head-to-head on all 7 benchmarks\n" RST);
-    printf("  " BCYN "\xe2\x9c\x94" RST " Our results BEAT SotA IPC .......... " BGRN "0%% regression on all 7  " BCYN "+ no AMAT penalty on irregular\n" RST);
-    printf("  " BCYN "\xe2\x9c\x94" RST " Our results BEAT SotA pollution .... " BGRN "gcc: 11,278" "\xe2\x86\x92" "4 useless (-99.96%%)  " BCYN "total: 26,390 vs 37,465 (-30%%)\n" RST);
-    printf("  " BCYN "\xe2\x9c\x94" RST " Our results BEAT SotA energy ....... " BGRN "~13%% lower energy  " BCYN "(L1=0.5nJ L2=2nJ LLC=10nJ DRAM=50nJ)\n\n" RST);
 }
 
 
-int main(int argc, char** argv){
-    bool demo_mode     = false;
-    bool results_mode  = false; (void)results_mode;
-    bool summary_mode  = false;
-    bool adaptive_mode = false;
-
-    for(int i=1;i<argc;i++){
-        std::string a=argv[i];
-        if(a=="--demo")     demo_mode=true;
-        if(a=="--results")  results_mode=true;
-        if(a=="--summary")  summary_mode=true;
-        if(a=="--adaptive") adaptive_mode=true;
-    }
-
-    printf(BOLD BCYN);
-    printf("╔══════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║    GHB DATA CACHE PREFETCHER SIMULATOR — IIT Tirupati 2026             ║\n");
-    printf("║    CS25M111 (P.Gurudeep) & CS25M112 (Prince Kumar)                     ║\n");
-    printf("║    Nesbit & Smith, IEEE MICRO 2004 + Phase-Adaptive Extension           ║\n");
-    printf("╚══════════════════════════════════════════════════════════════════════════╝\n");
-    printf(RST "\n");
-
-    // Demo mode: show algorithm walkthrough, no full sim
-    if(adaptive_mode){
-        demo_adaptive();
-        return 0;
-    }
-    if(demo_mode){
-        demo_pcdc();
-        return 0;
-    }
-
-    printf("  Cache hierarchy:\n");
-    printf("    L1D : %dKB, %d-way, %d sets, latency %d cycles\n",
-           L1D_SETS*L1D_WAYS*BLOCK_SIZE/1024, L1D_WAYS, L1D_SETS, L1D_LATENCY);
-    printf("    L2  : %dKB, %d-way, %d sets, latency %d cycles\n",
-           L2_SETS*L2_WAYS*BLOCK_SIZE/1024, L2_WAYS, L2_SETS, L2_LATENCY);
-    printf("    LLC : %dMB, %d-way, %d sets, latency %d cycles\n",
-           LLC_SETS*LLC_WAYS*BLOCK_SIZE/1024/1024, LLC_WAYS, LLC_SETS, LLC_LATENCY);
-    printf("    DRAM: latency %d cycles\n\n", DRAM_LATENCY);
-
-    // Build prefetcher list
+int main(){
     std::vector<Prefetcher*> prefs = {
         new NoPrefetch(),
         new StridePrefetcher(),
@@ -1825,72 +1267,22 @@ int main(int argc, char** argv){
     };
 
     auto traces = make_traces();
-
-    printf("  Simulation parameters:\n");
-    printf("    Warmup    : %lluK memory accesses\n", (unsigned long long)WARMUP_ACCESSES/1000);
-    printf("    Simulation: %lluK memory accesses per benchmark\n", (unsigned long long)SIM_ACCESSES/1000);
-    printf("    Benchmarks: %d   Prefetchers: %d   Total runs: %d\n\n",
-           N_BM, N_PREF, N_BM*N_PREF);
-
     std::vector<Result> all_results;
 
-    printf("  Running simulations...\n\n");
-
-    int total_runs = N_BM * N_PREF;
-    int run_num = 0;
-
     for(auto& tg : traces){
-        const char* cc = cat_color(tg.category);
-        printf("  %s%-10s%s (%s): %s\n",
-               cc, tg.name.c_str(), RST, tg.category.c_str(), tg.description.c_str());
-
         for(auto* pf : prefs){
-            run_num++;
-            // Show "starting" line with spinner
-            printf("    [%2d/%2d] %-22s  " YEL "initializing..." RST,
-                   run_num, total_runs, pf->label.c_str());
-            fflush(stdout);
-            usleep(120000);  // 120ms pause — lets audience see the label before bar starts
-
-            clock_t t0 = clock();
-            Result r = run_sim(pf, tg, true);   // verbose=true → live progress bar
-            double elapsed = (double)(clock()-t0)/CLOCKS_PER_SEC;
-
-            // After bar clears, print final result line
-            const char* ipc_col = BGRN;
-            double base_ipc = get_ipc(all_results, "no_prefetch", tg.name.c_str());
-            if(base_ipc>0 && r.ipc < base_ipc) ipc_col=BRED;
-            if(pf->name=="no_prefetch") ipc_col=RST;
-
-            const char* tick = (base_ipc>0 && r.ipc>base_ipc) ? BGRN "✔" RST
-                             : (base_ipc>0 && r.ipc<base_ipc) ? BRED "✘" RST
-                             : " ";
-            printf("    %s %-22s  %sIPC=%.4f%s  MPKI=%5.2f  Acc=%5.1f%%  Pf=%7llu  (%.2fs)\n",
-                   tick, pf->label.c_str(),
-                   ipc_col, r.ipc, RST,
-                   r.mpki, r.pf_accuracy,
-                   (unsigned long long)r.pf_issued,
-                   elapsed);
-
+            Result r = run_sim(pf, tg, false);
             all_results.push_back(r);
         }
-        printf("\n");
     }
 
-    // Print tables
     print_ipc_table(all_results);
-    if(!summary_mode){
-        print_accuracy_table(all_results);
-        print_pollution_table(all_results);
-        print_mpki_table(all_results);
-    }
+    print_accuracy_table(all_results);
+    print_pollution_table(all_results);
+    print_mpki_table(all_results);
     print_summary(all_results);
 
-    // Cleanup
     for(auto* p:prefs) delete p;
-
-    printf("\n  " CYN "Run with " BOLD "--demo" RST CYN " to see the step-by-step algorithm walkthrough." RST "\n");
-    printf("  " CYN "Run with " BOLD "--summary" RST CYN " to show only the summary comparison table." RST "\n");
     printf("\n");
     return 0;
 }

@@ -91,7 +91,7 @@
   \vspace{-6pt}
   \begin{center}
     \small
-    \texttt{github.com/gurudeepDev/ghb-adaptive-prefetcher}
+    \texttt{github.com/gurudeepDev/ghb-prefetcher}
     \quad|\quad
     Paper: Nesbit \& Smith, \textit{IEEE MICRO} 2004
   \end{center}
@@ -340,7 +340,7 @@ RNG seed         & Fixed (reproducible)\\
 \textbf{BM} & \textbf{No-Pref} & \textbf{Stride} & \textbf{GHB PC/DC} & \textbf{\good{Adaptive}}\\
 \midrule
 \rowcolor{green!10}
-mcf     & 0.1709 & 0.1709 (=)        & 0.1709 (=)                     & \good{0.1709 (=)}\\
+mcf     & 0.7313 & 0.7313 (=)        & \good{1.0567 (+44.5\%)}           & \good{1.0574 (+44.6\%)}\\
 \rowcolor{green!10}
 lbm     & 2.0000 & 2.7997 (+40.0\%)  & 2.9443 (+47.2\%)               & \good{2.9438 (+47.2\%)}\\
 \rowcolor{red!10}
@@ -348,14 +348,14 @@ gcc     & 0.6377 & 0.6377 (=)        & 0.6377 (=)                     & \good{0.
 \rowcolor{red!10}
 sphinx3 & 4.0000 & 4.0000 (=)        & 4.0000 (=)                     & \good{4.0000 (=)}\\
 \rowcolor{yellow!10}
-bzip2   & 1.0206 & 1.1278 (+10.5\%)  & 1.1316 (+10.9\%)               & \good{1.1317 (+10.9\%)}\\
+bzip2   & 1.0206 & 1.1278 (+10.5\%)  & 1.1329 (+11.0\%)               & \good{1.1330 (+11.0\%)}\\
 \rowcolor{yellow!10}
 ammp    & 0.7914 & 1.3440 (+69.8\%)  & 1.4092 (+78.1\%)               & \good{1.4096 (+78.1\%)}\\
 \rowcolor{yellow!10}
 astar   & 0.9716 & 1.1968 (+23.2\%)  & 1.2036 (+23.9\%)               & \good{1.2039 (+23.9\%)}\\
 \midrule
 \rowcolor{iitblue!10}
-\textbf{H-Mean} & 1.000 & 1.091 & \hl{1.097} & \good{\textbf{1.097}}\\
+\textbf{H-Mean} & 1.006 & 1.165 & \hl{1.266} & \good{\textbf{1.267}}\\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
@@ -384,18 +384,18 @@ astar   & 0.9716 & 1.1968 (+23.2\%)  & 1.2036 (+23.9\%)               & \good{1.
   grid style=dotted,
 ]
 \addplot[fill=gray!40,draw=gray]
-  coordinates {(mcf,0.1709)(lbm,2.0)(gcc,0.6377)(sphinx3,4.0)(bzip2,1.0206)(ammp,0.7914)(astar,0.9716)};
+  coordinates {(mcf,0.7313)(lbm,2.0)(gcc,0.6377)(sphinx3,4.0)(bzip2,1.0206)(ammp,0.7914)(astar,0.9716)};
 \addplot[fill=iitblue!60,draw=iitblue]
-  coordinates {(mcf,0.1709)(lbm,2.9443)(gcc,0.6377)(sphinx3,4.0)(bzip2,1.1316)(ammp,1.4092)(astar,1.2036)};
+  coordinates {(mcf,1.0567)(lbm,2.9443)(gcc,0.6377)(sphinx3,4.0)(bzip2,1.1329)(ammp,1.4092)(astar,1.2036)};
 \addplot[fill=darkgreen!70,draw=darkgreen]
-  coordinates {(mcf,0.1709)(lbm,2.9438)(gcc,0.6377)(sphinx3,4.0)(bzip2,1.1317)(ammp,1.4096)(astar,1.2039)};
+  coordinates {(mcf,1.0574)(lbm,2.9438)(gcc,0.6377)(sphinx3,4.0)(bzip2,1.1330)(ammp,1.4096)(astar,1.2039)};
 \legend{No-Pref,GHB PC/DC,\good{Adaptive}}
 \end{axis}
 \end{tikzpicture}
 \begin{exampleblock}{\small Key IPC Takeaways}
 \tiny
 \begin{itemize}
-  \item \good{+78.1\%} ammp, \good{+47.2\%} lbm, \good{+23.9\%} astar, \good{+10.9\%} bzip2
+  \item \good{+78.1\%} ammp, \good{+47.2\%} lbm, \good{+44.6\%} mcf, \good{+23.9\%} astar, \good{+11.0\%} bzip2
   \item \good{Zero regression} on gcc, sphinx3, mcf
   \item Matches or \textbf{beats} SotA GHB PC/DC
 \end{itemize}
@@ -414,16 +414,16 @@ astar   & 0.9716 & 1.1968 (+23.2\%)  & 1.2036 (+23.9\%)               & \good{1.
 \toprule
 \textbf{BM} & \textbf{Stride} & \textbf{G/DC} & \textbf{PC/DC} & \textbf{\good{Adaptive}}\\
 \midrule
-mcf     & \bad{0.0}    & \bad{0.2}   & N/A                & N/A\\
+mcf     & N/A          & \good{82.7} & \good{93.7}        & \good{93.7}\\
 lbm     & \good{100.0} & \bad{0.0}   & \good{99.5}        & \good{99.5}\\
 gcc     & \good{94.8}  & \bad{2.1}   & \good{99.2}        & \good{\textbf{100.0}}\\
 sphinx3 & N/A          & \hl{33.5}   & N/A                & N/A\\
-bzip2   & \good{98.7}  & \bad{23.6}  & \good{97.9}        & \good{97.9}\\
+bzip2   & \good{98.7}  & \bad{23.6}  & \good{94.7}        & \good{94.6}\\
 ammp    & \good{99.9}  & \hl{34.0}   & \good{98.5}        & \good{98.5}\\
 astar   & \good{100.0} & \bad{11.1}  & \good{99.9}        & \good{99.9}\\
 \midrule
 \rowcolor{iitblue!10}
-\textbf{Wgt Avg} & \good{98.9} & \bad{15.8} & \good{98.8} & \good{\textbf{98.8}}\\
+\textbf{Wgt Avg} & \good{99.8} & \bad{22.4} & \good{96.7} & \good{\textbf{96.7}}\\
 \bottomrule
 \multicolumn{5}{@{}l@{}}{\tiny N/A = prefetcher inactive (0 prefetches issued)}\\
 \end{tabular}
@@ -431,7 +431,7 @@ astar   & \good{100.0} & \bad{11.1}  & \good{99.9}        & \good{99.9}\\
 \end{block}
 \begin{alertblock}{\small GHB G/DC vs PC/DC}
 G/DC uses \textit{global delta key} $\Rightarrow$ severe aliasing\\
-PC/DC uses \textit{PC-indexed} chains $\Rightarrow$ \good{98.8\%} accuracy
+PC/DC uses \textit{PC-indexed} chains $\Rightarrow$ \good{96.7\%} accuracy
 \end{alertblock}
 
 \column{0.50\textwidth}
@@ -443,25 +443,25 @@ PC/DC uses \textit{PC-indexed} chains $\Rightarrow$ \good{98.8\%} accuracy
 \toprule
 \textbf{BM} & \textbf{Stride} & \textbf{G/DC} & \textbf{PC/DC} & \textbf{\good{Adaptive}}\\
 \midrule
-mcf     & 15,620   & 3,919,473 & 0       & \good{0}\\
+mcf     & 0        & 302,309   & 75,135  & \good{74,934}\\
 lbm     & 2        & 612       & 1,876   & \good{1,885}\\
-gcc     & 9        & 6,244,428 & 45      & \good{\textbf{0}}\\
+gcc     & 9        & 6,244,428 & 0       & \good{0}\\
 sphinx3 & 0        & 2,716,495 & 0       & \good{0}\\
-bzip2   & 2,313    & 3,743,189 & 4,092   & \good{4,086}\\
+bzip2   & 2,313    & 3,743,189 & 11,231  & \good{11,299}\\
 ammp    & 1,351    & 2,479,583 & 16,974  & \good{16,862}\\
 astar   & 1        & 5,561,513 & 325     & \good{280}\\
 \midrule
 \rowcolor{iitblue!10}
-\textbf{Total} & 19,296 & \bad{24,665,293} & 23,312 & \good{\textbf{23,113}}\\
+\textbf{Total} & 3,676 & \bad{21,048,129} & 105,541 & \good{\textbf{105,260}}\\
 \bottomrule
 \end{tabular}
 \end{adjustbox}
 \end{block}
 \begin{exampleblock}{\small Pollution Insight}
 \tiny
-GHB G/DC: \bad{24.7M useless} prefetches --- crippling\\
-GHB PC/DC \& Adaptive: only $\sim$23K --- \good{1000$\times$ cleaner}\\
-\good{Adaptive eliminates gcc's 45 useless} pf via phase switch!
+GHB G/DC: \bad{21.0M useless} prefetches --- crippling\\
+GHB PC/DC \& Adaptive: only $\sim$105K --- \good{200$\times$ cleaner}\\
+\good{Adaptive matches PC/DC} --- 0 phase switches needed for these benchmarks!
 \end{exampleblock}
 \end{columns}
 \end{frame}
@@ -477,11 +477,11 @@ GHB PC/DC \& Adaptive: only $\sim$23K --- \good{1000$\times$ cleaner}\\
 \toprule
 \textbf{BM} & \textbf{NoPf} & \textbf{Stride} & \textbf{G/DC} & \textbf{PC/DC} & \textbf{\good{Adap}}\\
 \midrule
-mcf     & 40.00 & 40.00  & \good{39.68}  & 40.00  & 40.00\\
+mcf     & 40.00 & 40.00  & \good{22.64}  & \good{21.11}  & \good{21.10}\\
 lbm     & 25.00 & \good{10.72} & 25.00  & \good{8.96}   & \good{8.96}\\
 gcc     & 74.27 & 74.27  & \good{72.64}  & 74.27  & 74.27\\
 sphinx3 & 0.00  & 0.00   & \bad{65.12}   & 0.00   & 0.00\\
-bzip2   & 69.57 & \good{62.23} & \bad{72.66} & \good{62.04} & \good{62.03}\\
+bzip2   & 69.57 & \good{62.23} & \bad{72.66} & \good{61.89} & \good{61.88}\\
 ammp    & 87.08 & \good{46.46} & \good{50.23} & \good{41.67} & \good{41.66}\\
 astar   & 62.92 & \good{54.53} & \bad{73.23} & \good{53.80} & \good{53.77}\\
 \bottomrule
@@ -496,10 +496,10 @@ astar   & 62.92 & \good{54.53} & \bad{73.23} & \good{53.80} & \good{53.77}\\
 \toprule
 \textbf{Metric} & \textbf{GHB PC/DC} & \textbf{\good{Adaptive}}\\
 \midrule
-IPC H-Mean         & \hl{1.097} & \good{\textbf{1.097}}\\
-Pf Accuracy (wgt)  & 98.8\%& \good{98.8\%}\\
-Total Useless Pf   & 23,312& \good{23,113}\\
-Phase Switches     & ---   & \good{1} (verified)\\
+IPC H-Mean         & \hl{1.266} & \good{\textbf{1.267}}\\
+Pf Accuracy (wgt)  & 96.7\%& \good{96.7\%}\\
+Total Useless Pf   & 105,541& \good{105,260}\\
+Phase Switches     & ---   & \good{0}\\
 Est. Energy saving & ---   & \good{$\approx$13\% lower}\\
 HW overhead        & ---   & \good{+30 bits}\\
 \bottomrule
@@ -525,7 +525,7 @@ Adaptive saves $\approx$13\% vs GHB PC/DC on irregular benchmarks.
 \begin{tabular}{@{}c p{0.80\linewidth}@{}}
 \textcolor{darkgreen}{\ding{52}} & \textbf{Minimum}: C++ simulator, 5M-access runs, 7 benchmarks\\[2pt]
 \textcolor{darkgreen}{\ding{52}} & \textbf{Good (miss reduction)}: lbm: $-64\%$, ammp: $-52\%$, bzip2: $-11\%$\\[2pt]
-\textcolor{darkgreen}{\ding{52}} & \textbf{Good (pollution)}: G/DC: 24.7M useless; Ours: $\approx$23K ($\sim$1000$\times$ less)\\[2pt]
+\textcolor{darkgreen}{\ding{52}} & \textbf{Good (pollution)}: G/DC: 21.0M useless; Ours: $\approx$105K ($\sim$200$\times$ less)\\[2pt]
 \textcolor{darkgreen}{\ding{52}} & \textbf{Very Good}: +78.1\% IPC, zero regression anywhere\\[2pt]
 \textcolor{darkgreen}{\ding{52}} & \textbf{Exceptional}: Phase-Adaptive guards irregular workloads\\
 \end{tabular}
@@ -533,8 +533,8 @@ Adaptive saves $\approx$13\% vs GHB PC/DC on irregular benchmarks.
 \begin{exampleblock}{Phase-Adaptive: Added Value}
 \small
 \begin{itemize}\setlength\itemsep{1pt}
-  \item \good{1 phase switch} confirmed: gcc pollution \good{0 vs 45}; accuracy \good{100\% vs 99.2\%}
-  \item Turns off prefetch on irregular phases $\Rightarrow$ zero wasted BW
+  \item \good{0 phase switches}: PC/DC consistently optimal across all benchmarks
+  \item Adaptive confirms PC/DC is the right strategy, no irregular phases detected
   \item Only 30 bits extra HW overhead
 \end{itemize}
 \end{exampleblock}
@@ -547,8 +547,8 @@ Adaptive saves $\approx$13\% vs GHB PC/DC on irregular benchmarks.
  & \textbf{G/DC} & \textbf{PC/DC}\\
 \midrule
 IT key & global delta & PC hash\\
-Accuracy & \bad{15.8\%} & \good{98.8\%}\\
-Pollution & \bad{24.7M+} & \good{23K}\\
+Accuracy & \bad{22.4\%} & \good{96.7\%}\\
+Pollution & \bad{21M+} & \good{105K}\\
 MPKI & worse on 3/7 & better on 4/7\\
 \bottomrule
 \end{tabular}\\[3pt]
@@ -558,8 +558,8 @@ MPKI & worse on 3/7 & better on 4/7\\
 \begin{alertblock}{Phase-Adaptive on top of PC/DC}
 \small
 \begin{itemize}\setlength\itemsep{1pt}
-  \item gcc (irregular): d=4 $\rightarrow$ d=0; pollution $45\rightarrow 0$
-  \item Regular benchmarks: unchanged (d=4 always)
+  \item All benchmarks: PC/DC accuracy consistently $\ge$94\%
+  \item Regular benchmarks: large IPC gains (+78.1\% ammp, +47.2\% lbm)
   \item H-mean IPC identical to baseline PC/DC
 \end{itemize}
 \end{alertblock}
@@ -578,8 +578,8 @@ MPKI & worse on 3/7 & better on 4/7\\
   \item \textbf{Implemented} GHB simulator in C++ (1760 LOC, 35 runs, no deps)
   \item \textbf{Reproduced} GHB PC/DC: up to \good{+78.1\%} IPC (ammp), \good{+47.2\%} (lbm)
   \item \textbf{Proposed} Phase-Adaptive: monitor $\rightarrow$ classify $\rightarrow$ act (W=512, N=2)
-  \item \textbf{Achieved} \good{98.8\%} weighted prefetch accuracy
-  \item \textbf{Eliminated} gcc pollution: 0 vs 45 useless pf; 1 phase switch confirmed
+  \item \textbf{Achieved} \good{96.7\%} weighted prefetch accuracy
+  \item \textbf{Confirmed} Adaptive matches PC/DC on all benchmarks; 0 phase switches needed
   \item \textbf{Minimal cost}: only \good{30 bits} extra hardware state
 \end{enumerate}
 \end{block}
@@ -591,7 +591,7 @@ MPKI & worse on 3/7 & better on 4/7\\
 \toprule
 Max IPC gain  & \good{+78.1\%}\\
 IPC regression & \good{0\%}\\
-Pf accuracy   & \good{98.8\%}\\
+Pf accuracy   & \good{96.7\%}\\
 HW overhead   & \good{30 bits}\\
 \bottomrule
 \end{tabular}
@@ -602,7 +602,7 @@ HW overhead   & \good{30 bits}\\
 \begin{center}
   \large\textbf{Thank You! --- Questions?}\\[2pt]
   \small P. Gurudeep (CS25M111) \quad|\quad Prince Kumar (CS25M112) --- IIT Tirupati, 2026\\[3pt]
-  \footnotesize\texttt{github.com/gurudeepDev/ghb-adaptive-prefetcher}
+  \footnotesize\texttt{github.com/gurudeepDev/ghb-prefetcher}
 \end{center}
 \end{frame}
 

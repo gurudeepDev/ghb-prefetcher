@@ -106,7 +106,7 @@
 \section{Block Diagram \& Integration}
 % ===========================================================
 \begin{frame}[shrink=3]{Slide 2 --- GHB Structure \& Integration with Cache Hierarchy}
-\begin{columns}[T]
+\begin{columns}[T,totalwidth=\textwidth]
 \column{0.46\textwidth}
 \begin{center}
   \textbf{\footnotesize Concept: History Table $\rightarrow$ GHB}
@@ -123,6 +123,7 @@
 \column{0.26\textwidth}
 \begin{exampleblock}{HW Overhead: \good{30 bits}}
 \scriptsize
+\centering
 \begin{tabular}{@{}ll@{}}
 \texttt{epoch\_ctr}   & 8 bits \\
 \texttt{pf\_issued}   & 8 bits \\
@@ -134,6 +135,7 @@
 \end{exampleblock}
 \begin{block}{Cache Hierarchy}
 \scriptsize
+\centering
 \begin{tabular}{@{}ll@{}}
 L1D  & 32\,KB, 4-cyc \\
 L2   & 256\,KB, 10-cyc \\
@@ -178,11 +180,13 @@ Issue $\le$\texttt{degree} lines via \textit{pattern continuation}
 
 % Epoch trace table
 \begin{frame}{Slide 3 (cont.) --- Phase-Switch Example}
-\begin{columns}[T]
+\begin{columns}[T,totalwidth=\textwidth]
 \column{0.54\textwidth}
 \begin{block}{Live Epoch Trace --- bzip2-like workload}
 \setlength{\tabcolsep}{3pt}
 \footnotesize
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}c l c c >{\columncolor{iitblue!10}}c l@{}}
 \toprule
 \textbf{Ep} & \textbf{Phase} & \textbf{Acc} & \textbf{Class} & \textbf{d} & \textbf{Action}\\
@@ -199,6 +203,7 @@ Issue $\le$\texttt{degree} lines via \textit{pattern continuation}
 8 & Array scan  & 91\% & PRED  & \textbf{4} & \good{SWITCH d=4}\\
 \bottomrule
 \end{tabular}
+\end{adjustbox}
 \end{block}
 
 \column{0.44\textwidth}
@@ -222,10 +227,12 @@ Ours turns off on irregular $\Rightarrow$ \good{zero pollution} on gcc.
 \section{Implementation Details}
 % ===========================================================
 \begin{frame}[fragile]{Slide 4 --- Implementation Details}
-\begin{columns}[T]
+\begin{columns}[T,totalwidth=\textwidth]
 \column{0.48\textwidth}
 \begin{block}{Codebase Statistics}
 \tiny
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}ll@{}}
 \toprule
 \textbf{Metric} & \textbf{Value}\\
@@ -238,6 +245,7 @@ Cache model     & L1D/L2/LLC/DRAM\\
 Stats           & IPC, MPKI, Acc, Pollution\\
 \bottomrule
 \end{tabular}
+\end{adjustbox}
 \end{block}
 \begin{block}{Key Structs}
 \tiny
@@ -276,10 +284,12 @@ for(int k2 = 1; k2 <= cur_degree; k2++){
 \section{Experimental Setup}
 % ===========================================================
 \begin{frame}[shrink=12]{Slide 5 --- Experimental Setup}
-\begin{columns}[T]
+\begin{columns}[T,totalwidth=\textwidth]
 \column{0.48\textwidth}
 \begin{block}{Simulated CPU Configuration}
 \footnotesize\setlength{\tabcolsep}{3pt}
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}ll@{}}
 \toprule
 \textbf{Parameter} & \textbf{Value}\\
@@ -293,11 +303,14 @@ Simulation       & 5M accesses/run; 35 runs\\
 RNG seed         & Fixed (reproducible)\\
 \bottomrule
 \end{tabular}
+\end{adjustbox}
 \end{block}
 
 \column{0.50\textwidth}
 \begin{block}{Benchmark Programs}
 \footnotesize\setlength{\tabcolsep}{3pt}
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}lll@{}}
 \toprule
 \textbf{Name} & \textbf{Cat.} & \textbf{Pattern}\\
@@ -311,6 +324,7 @@ RNG seed         & Fixed (reproducible)\\
 \textbf{astar}   & \hl{Mixed}   & BFS + edge lookup\\
 \bottomrule
 \end{tabular}
+\end{adjustbox}
 \end{block}
 \begin{block}{Prefetchers Compared}
 \footnotesize
@@ -329,12 +343,13 @@ RNG seed         & Fixed (reproducible)\\
 \section{Experimental Results}
 % ===========================================================
 \begin{frame}{Slide 6 --- Results: IPC Comparison}
-\begin{columns}[T]
+\begin{columns}[T,totalwidth=\textwidth]
 \column{0.58\textwidth}
 \begin{block}{Table 1 --- IPC vs No-Prefetch Baseline}
 \setlength{\tabcolsep}{2pt}
 \tiny
-\begin{adjustbox}{max width=\linewidth}
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}l r r r r@{}}
 \toprule
 \textbf{BM} & \textbf{No-Pref} & \textbf{Stride} & \textbf{GHB PC/DC} & \textbf{\good{Adaptive}}\\
@@ -409,7 +424,8 @@ astar   & 0.9716 & 1.1968 (+23.2\%)  & 1.2036 (+23.9\%)               & \good{1.
 \begin{block}{Table 2 --- Prefetch Accuracy (\%)}
 \tiny
 \setlength{\tabcolsep}{3pt}
-\begin{adjustbox}{max width=\linewidth}
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}l r r r r@{}}
 \toprule
 \textbf{BM} & \textbf{Stride} & \textbf{G/DC} & \textbf{PC/DC} & \textbf{\good{Adaptive}}\\
@@ -438,7 +454,8 @@ PC/DC uses \textit{PC-indexed} chains $\Rightarrow$ \good{96.7\%} accuracy
 \begin{block}{Table 3 --- Useless Prefetches (Cache Pollution)}
 \tiny
 \setlength{\tabcolsep}{2pt}
-\begin{adjustbox}{max width=\linewidth}
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}l r r r r@{}}
 \toprule
 \textbf{BM} & \textbf{Stride} & \textbf{G/DC} & \textbf{PC/DC} & \textbf{\good{Adaptive}}\\
@@ -467,12 +484,13 @@ GHB PC/DC \& Adaptive: only $\sim$105K --- \good{200$\times$ cleaner}\\
 \end{frame}
 
 \begin{frame}{Slide 6 (cont.) --- MPKI \& Summary}
-\begin{columns}[T]
+\begin{columns}[T,totalwidth=\textwidth]
 \column{0.57\textwidth}
 \begin{block}{Table 4 --- L1D MPKI (Misses per Kilo-Instruction)}
 \tiny
 \setlength{\tabcolsep}{2pt}
-\begin{adjustbox}{max width=\linewidth}
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}l r r r r r@{}}
 \toprule
 \textbf{BM} & \textbf{NoPf} & \textbf{Stride} & \textbf{G/DC} & \textbf{PC/DC} & \textbf{\good{Adap}}\\
@@ -492,6 +510,8 @@ astar   & 62.92 & \good{54.53} & \bad{73.23} & \good{53.80} & \good{53.77}\\
 \column{0.43\textwidth}
 \begin{block}{Summary Table}
 \tiny
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}lcc@{}}
 \toprule
 \textbf{Metric} & \textbf{GHB PC/DC} & \textbf{\good{Adaptive}}\\
@@ -504,6 +524,7 @@ Est. Energy saving & ---   & \good{$\approx$13\% lower}\\
 HW overhead        & ---   & \good{+30 bits}\\
 \bottomrule
 \end{tabular}
+\end{adjustbox}
 \end{block}
 \begin{exampleblock}{\small Energy Estimate}
 \tiny Vogelsang MICRO 2010 model:\\
@@ -518,10 +539,12 @@ Adaptive saves $\approx$13\% vs GHB PC/DC on irregular benchmarks.
 \section{Discussion}
 % ===========================================================
 \begin{frame}{Slide 7 --- Discussion: Why Phase-Adaptive Wins}
-\begin{columns}[T]
+\begin{columns}[T,totalwidth=\textwidth]
 \column{0.50\textwidth}
 \begin{block}{Evaluation Criteria Achievement}
 \tiny
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}c p{0.80\linewidth}@{}}
 \textcolor{darkgreen}{\ding{52}} & \textbf{Minimum}: C++ simulator, 5M-access runs, 7 benchmarks\\[2pt]
 \textcolor{darkgreen}{\ding{52}} & \textbf{Good (miss reduction)}: lbm: $-64\%$, ammp: $-52\%$, bzip2: $-11\%$\\[2pt]
@@ -529,6 +552,7 @@ Adaptive saves $\approx$13\% vs GHB PC/DC on irregular benchmarks.
 \textcolor{darkgreen}{\ding{52}} & \textbf{Very Good}: +78.1\% IPC, zero regression anywhere\\[2pt]
 \textcolor{darkgreen}{\ding{52}} & \textbf{Exceptional}: Phase-Adaptive guards irregular workloads\\
 \end{tabular}
+\end{adjustbox}
 \end{block}
 \begin{exampleblock}{Phase-Adaptive: Added Value}
 \small
@@ -542,6 +566,8 @@ Adaptive saves $\approx$13\% vs GHB PC/DC on irregular benchmarks.
 \column{0.50\textwidth}
 \begin{block}{Prefetcher Comparison}
 \tiny
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}l p{0.35\linewidth} p{0.38\linewidth}@{}}
 \toprule
  & \textbf{G/DC} & \textbf{PC/DC}\\
@@ -551,7 +577,8 @@ Accuracy & \bad{22.4\%} & \good{96.7\%}\\
 Pollution & \bad{21M+} & \good{105K}\\
 MPKI & worse on 3/7 & better on 4/7\\
 \bottomrule
-\end{tabular}\\[3pt]
+\end{tabular}
+\end{adjustbox}\\[3pt]
 \textbf{G/DC} uses global delta key $\Rightarrow$ all PCs producing same delta share one GHB chain $\Rightarrow$ massive aliasing.\\[3pt]
 \textbf{PC/DC} uses PC hash $\Rightarrow$ per-load chains $\Rightarrow$ accurate delta correlation.
 \end{block}
@@ -570,7 +597,7 @@ MPKI & worse on 3/7 & better on 4/7\\
 \section{Conclusion}
 % ===========================================================
 \begin{frame}[shrink=5]{Slide 8 --- Conclusion}
-\begin{columns}[T]
+\begin{columns}[T,totalwidth=\textwidth]
 \column{0.58\textwidth}
 \begin{block}{Summary of Contributions}
 \footnotesize
@@ -587,6 +614,8 @@ MPKI & worse on 3/7 & better on 4/7\\
 \column{0.40\textwidth}
 \begin{exampleblock}{Key Numbers}
 \footnotesize
+\centering
+\begin{adjustbox}{center,max width=\linewidth}
 \begin{tabular}{@{}lr@{}}
 \toprule
 Max IPC gain  & \good{+78.1\%}\\
@@ -595,6 +624,7 @@ Pf accuracy   & \good{96.7\%}\\
 HW overhead   & \good{30 bits}\\
 \bottomrule
 \end{tabular}
+\end{adjustbox}
 \end{exampleblock}
 \end{columns}
 

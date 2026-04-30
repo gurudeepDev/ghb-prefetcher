@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# LaTeX build artefacts
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.vrb
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Compiled binary
+sim/sim
+
+# Temp files
+*.tmp
+*.bak
